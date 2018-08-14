@@ -52,6 +52,22 @@ class ArchiveModes(Enum):
     always = u('always')
     """The session will be automatically archived."""
 
+class LayoutType(Enum):
+    """List of valid settings for the layout.type parameter of the OpenTok.create_session() method"""
+    best_fit = u('bestFit')
+    """This is a tiled layout, which scales according to the number of videos."""
+    picture_in_picture = u('pip')
+    """This is a picture-in-picture layout, where a small stream is visible over a full-size stream."""
+    vertical_presentation = u('verticalPresentation')
+    """This is a layout with one large stream on the right edge of the output, and several smaller
+    streams along the left edge of the output."""
+    horizontal_presentation = u('horizontalPresentation')
+    """This is a layout with one large stream on the top edge of the output, and several smaller
+    streams along the bottom edge of the output."""
+    custom = u('custom')
+    """Use a custom layout."""
+
+
 class OpenTok(object):
     """Use this SDK to create tokens and interface with the server-side portion
     of the Opentok API.
@@ -311,7 +327,8 @@ class OpenTok(object):
             url = url + '/' + archive_id
         return url
 
-    def start_archive(self, session_id, has_audio=True, has_video=True, name=None, output_mode=OutputModes.composed, resolution=None):
+    def start_archive(self, session_id, has_audio=True, has_video=True, name=None, output_mode=OutputModes.composed, resolution=None,
+        layout_type=LayoutType.best_fit, stylesheet=None):
         """
         Starts archiving an OpenTok session.
 
@@ -353,12 +370,19 @@ class OpenTok(object):
         if resolution and output_mode == OutputModes.individual:
             raise OpenTokException(u('Invalid parameters: Resolution cannot be supplied for individual output mode.'))
 
+        layout_options = {
+            u('type'): layout_type.value,
+        }
+        if stylesheet:
+            layout_options[u('stylesheet')] = stylesheet
+
         payload = {'name': name,
                    'sessionId': session_id,
                    'hasAudio': has_audio,
                    'hasVideo': has_video,
                    'outputMode': output_mode.value,
                    'resolution': resolution,
+                   'layout': layout_options,
         }
 
         response = requests.post(self.archive_url(), data=json.dumps(payload), headers=self.archive_headers(), proxies=self.proxies, timeout=self.timeout)
