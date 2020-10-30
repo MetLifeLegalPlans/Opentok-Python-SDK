@@ -19,7 +19,7 @@ http://www.pip-installer.org/en/latest/
 Add the ``opentok`` package as a dependency in your project. The most common way is to add it to your
 ``requirements.txt`` file::
 
-  opentok>=2.6.0
+  opentok>=2.10.0
 
 Next, install the dependencies::
 
@@ -185,9 +185,9 @@ To delete an Archive, you can call the ``opentok.delete_archive(archive_id)`` me
   archive.delete()
 
 You can also get a list of all the Archives you've created (up to 1000) with your API Key. This is
-done using the ``opentok.list_archives()`` method. There are two optional keyword parameters:
-``count`` and ``offset``; they can help you paginate through the results. This method returns an
-instance of the ``ArchiveList`` class.
+done using the ``opentok.list_archives()`` method. There are three optional keyword parameters:
+``count``, ``offset`` and ``session_id``; they can help you paginate through the results and
+filter by session ID. This method returns an instance of the ``ArchiveList`` class.
 
 .. code:: python
 
@@ -207,9 +207,262 @@ Note that you can also create an automatically archived session, by passing in
 ``ArchiveModes.always`` as the ``archive_mode`` parameter when you call the
 ``opentok.create_session()`` method (see "Creating Sessions," above).
 
+For composed archives, you can change the layout dynamically, using the `opentok.set_archive_layout(archive_id, type, stylesheet)` method:
+
+.. code:: python
+
+  opentok.set_archive_layout('ARCHIVEID', 'horizontalPresentation')
+
+Setting the layout of composed archives is optional. By default, composed archives use the `best fit` layout.  Other valid values are: `custom`, `horizontalPresentation`, `pip` and `verticalPresentation`. If you specify a `custom` layout type, set the stylesheet parameter:
+
+.. code:: python
+
+  opentok.set_archive_layout(
+      'ARCHIVEID',
+      'custom',
+      'stream.instructor {position: absolute; width: 100%;  height:50%;}'
+  )
+
+For other layout types, do not set the stylesheet property. For more information see
+`Customizing the video layout for composed archives <https://tokbox.com/developer/guides/archiving/layout-control.html>`_.
+
 For more information on archiving, see the
 `OpenTok archiving <https://tokbox.com/opentok/tutorials/archiving/>`_ programming guide.
 
+Sending Signals
+~~~~~~~~~~~~~~~~~~~~~
+
+Once a Session is created, you can send signals to everyone in the session or to a specific connection. You can send a signal by calling the ``signal(session_id, payload)`` method of the ``OpenTok`` class. The ``payload`` parameter is a dictionary used to set the ``type``, ``data`` fields. Ỳou can also call the method with the parameter ``connection_id`` to send a signal to a specific connection ``signal(session_id, data, connection_id)``.
+
+.. code:: python
+
+  # payload structure
+  payload = {
+      'type': 'type', #optional
+      'data': 'signal data' #required
+  }
+
+  connection_id = '2a84cd30-3a33-917f-9150-49e454e01572'
+
+  # To send a signal to everyone in the session:
+  opentok.signal(session_id, payload)
+
+  # To send a signal to a specific connection in the session:
+  opentok.signal(session_id, payload, connection_id)
+
+Working with Streams
+~~~~~~~~~~~~~~~~~~~~~
+
+You can get information about a stream by calling the `get_stream(session_id, stream_id)` method of the `OpenTok` class.
+
+The method returns a Stream object that contains information of an OpenTok stream:
+
+* ``id``: The stream ID
+* ``videoType``: "camera" or "screen"
+* ``name``: The stream name (if one was set when the client published the stream)
+* ``layoutClassList``: It's an array of the layout classes for the stream
+
+.. code:: python
+
+  session_id = 'SESSIONID'
+  stream_id = '8b732909-0a06-46a2-8ea8-074e64d43422'
+
+  # To get stream info:
+  stream = opentok.get_stream(session_id, stream_id)
+
+  # Stream properties:
+  print stream.id #8b732909-0a06-46a2-8ea8-074e64d43422
+  print stream.videoType #camera
+  print stream.name #stream name
+  print stream.layoutClassList #['full']
+
+Also, you can get information about all the streams in a session by calling the `list_streams(session_id)` method of the `OpenTok` class.
+
+The method returns a StreamList object that contains a list of all the streams
+
+.. code:: python
+
+  # To get all streams in a session:
+  stream_list = opentok.list_streams(session_id)
+
+  # Getting the first stream of the list
+  stream = stream_list.items[0]
+
+  # Stream properties:
+  print stream.id #8b732909-0a06-46a2-8ea8-074e64d43422
+  print stream.videoType #camera
+  print stream.name #stream name
+  print stream.layoutClassList #['full']
+
+You can change the layout classes for streams in a session by calling the `set_stream_class_lists(session_id, stream_list)` method of the `OpenTok` class.
+
+The layout classes define how the stream is displayed in the layout of a composed OpenTok archive.
+
+.. code:: python
+
+  # This list contains the information of the streams that will be updated. Each element
+  # in the list is a dictionary with two properties: 'id' and 'layoutClassList'. The 'id'
+  # property is the stream ID (a String), and the 'layoutClassList' is an array of class
+  # names (Strings) to apply to the stream.
+  payload = [
+      {'id': '7b09ec3c-26f9-43d7-8197-f608f13d4fb6', 'layoutClassList': ['focus']},
+      {'id': '567bc941-6ea0-4c69-97fc-70a740b68976', 'layoutClassList': ['top']},
+      {'id': '307dc941-0450-4c09-975c-705740d08970', 'layoutClassList': ['bottom']}
+  ]
+
+  opentok.set_stream_class_lists('SESSIONID', payload)
+
+For more information see
+`Changing the composed archive layout classes for an OpenTok stream <https://tokbox.com/developer/rest/#change-stream-layout-classes-composed>`_.
+
+Force Disconnect
+~~~~~~~~~~~~~~~~~~~~~
+
+Your application server can disconnect a client from an OpenTok session by calling the force_disconnect(session_id, connection_id) method of the OpenTok class, or the force_disconnect(connection_id) method of the Session class.
+
+.. code:: python
+
+  session_id = 'SESSIONID'
+  connection_id = 'CONNECTIONID'
+
+  # To send a request to disconnect a client:
+  opentok.force_disconnect(session_id, connection_id)
+
+Working with SIP Interconnect
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+You can connect your SIP platform to an OpenTok session, the audio from your end of the SIP call is added to the OpenTok session as an audio-only stream. The OpenTok Media Router mixes audio from other streams in the session and sends the mixed audio to your SIP endpoint.
+
+.. code:: python
+
+  session_id = u('SESSIONID')
+  token = u('TOKEN')
+  sip_uri = u('sip:user@sip.partner.com;transport=tls')
+
+  # call the method with the required parameters
+  sip_call = opentok.dial(session_id, token, sip_uri)
+
+  # the method also support aditional options to establish the sip call
+
+  options = {
+      'from': 'from@example.com',
+      'headers': {
+          'headerKey': 'headerValue'
+      },
+      'auth': {
+          'username': 'username',
+          'password': 'password'
+      },
+      'secure': True
+  }
+
+  # call the method with aditional options
+  sip_call = opentok.dial(session_id, token, sip_uri, options)
+
+For more information, including technical details and security considerations, see the
+`OpenTok SIP interconnect <https://tokbox.com/developer/guides/sip/>`_ developer guide.
+
+Working with Broadcasts
+~~~~~~~~~~~~~~~~~~~~~~~
+
+OpenTok broadcast lets you share live OpenTok sessions with many viewers.
+
+You can use the ``opentok.start_broadcast()`` method to start a live streaming for an OpenTok session. This broadcasts the session to an HLS (HTTP live streaming) or to RTMP streams.
+
+To successfully start broadcasting a session, at least one client must be connected to the session.
+
+The live streaming broadcast can target one HLS endpoint and up to five RTMP servers simulteneously for a session. You can only start live streaming for sessions that use the OpenTok Media Router; you cannot use live streaming with sessions that have the media mode set to relayed.
+
+.. code:: python
+
+  session_id = 'SESSIONID'
+  options = {
+    'layout': {
+      'type': 'custom',
+      'stylesheet': 'the layout stylesheet (only used with type == custom)'
+    },
+    'maxDuration': 5400,
+    'outputs': {
+      'hls': {},
+      'rtmp': [{
+        'id': 'foo',
+        'serverUrl': 'rtmp://myfooserver/myfooapp',
+        'streamName': 'myfoostream'
+      }, {
+        'id': 'bar',
+        'serverUrl': 'rtmp://mybarserver/mybarapp',
+        'streamName': 'mybarstream'
+      }]
+    },
+    'resolution': '640x480'
+  }
+
+  broadcast = opentok.start_broadcast(session_id, options)
+
+You can stop a started Broadcast using the ``opentok.stop_broadcast(broadcast_id)`` method.
+
+.. code:: python
+
+  # getting the ID from a broadcast object
+  broadcast_id = broadcast.id
+
+  # stop a broadcast
+  broadcast = opentok.stop_broadcast(broadcast_id)
+
+You can get details on a broadcast that is in-progress using the method ``opentok.get_broadcast(broadcast_id)``.
+
+.. code:: python
+
+  broadcast_id = '1748b7070a81464c9759c46ad10d3734'
+
+  # get broadcast details
+  broadcast = opentok.get_broadcast(broadcast_id)
+
+  print broadcast.json()
+
+  # print result
+  # {
+  #   "createdAt": 1437676551000,
+  #   "id": "1748b707-0a81-464c-9759-c46ad10d3734",
+  #   "projectId": 100,
+  #   "resolution": "640x480",
+  #   "sessionId": "2_MX4xMDBfjE0Mzc2NzY1NDgwMTJ-TjMzfn4",
+  #   "status": "started",
+  #   "updatedAt": 1437676551000,
+  #   "broadcastUrls": {
+  #       "hls": "http://server/fakepath/playlist.m3u8",
+  #       "rtmp": {
+  #           "bar": {
+  #               "serverUrl": "rtmp://mybarserver/mybarapp",
+  #               "status": "live",
+  #               "streamName": "mybarstream"
+  #           },
+  #           "foo": {
+  #               "serverUrl": "rtmp://myfooserver/myfooapp",
+  #               "status": "live",
+  #               "streamName": "myfoostream"
+  #           }
+  #       }
+  #   }
+  # }
+
+You can dynamically change the layout type of a live streaming broadcast.
+
+.. code:: python
+
+  # Valid values to 'layout_type' are: 'custom', 'horizontalPresentation',
+  # 'pip' and 'verticalPresentation' 
+  opentok.set_broadcast_layout('BROADCASTID', 'horizontalPresentation')
+
+  # if you specify a 'custom' layout type, set the stylesheet parameter:
+  opentok.set_broadcast_layout(
+      'BROADCASTID',
+      'custom',
+      'stream.instructor {position: absolute; width: 100%;  height:50%;}'
+  )
+
+For more information about OpenTok live streaming broadcasts, see the
+`Broadcast developer guide <https://tokbox.com/developer/guides/broadcast/>`_.
 
 Samples
 -------
