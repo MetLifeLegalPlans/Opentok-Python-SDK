@@ -19,9 +19,26 @@ from six import text_type, u, b, PY3
 from enum import Enum
 
 from .version import __version__
+from .endpoints import Endpoints
 from .session import Session
 from .archives import Archive, ArchiveList, OutputModes
-from .exceptions import OpenTokException, RequestError, AuthError, NotFoundError, ArchiveError
+from .stream import Stream
+from .streamlist import StreamList
+from .sip_call import SipCall
+from .broadcast import Broadcast
+from .exceptions import (
+    OpenTokException,
+    RequestError,
+    AuthError,
+    NotFoundError,
+    ArchiveError,
+    SignalingError,
+    GetStreamError,
+    ForceDisconnectError,
+    SipDialError,
+    SetStreamClassError,
+    BroadcastError
+)
 
 class Roles(Enum):
     """List of valid roles for a token."""
@@ -78,9 +95,9 @@ class OpenTok(object):
     def __init__(self, api_key, api_secret, api_url='https://api.opentok.com', timeout=None):
         self.api_key = str(api_key)
         self.api_secret = api_secret
-        self.api_url = api_url
         self.timeout = timeout
         self._proxies = None
+        self.endpoints = Endpoints(api_url, self.api_key)
 
     @property
     def proxies(self):
@@ -280,7 +297,7 @@ class OpenTok(object):
             options[u('location')] = location
 
         try:
-            response = requests.post(self.session_url(), data=options, headers=self.headers(), proxies=self.proxies, timeout=self.timeout)
+            response = requests.post(self.endpoints.session_url(), data=options, headers=self.headers(), proxies=self.proxies, timeout=self.timeout)
             response.encoding = 'utf-8'
 
             if response.status_code == 403:
@@ -309,23 +326,11 @@ class OpenTok(object):
             'X-OPENTOK-AUTH': self._create_jwt_auth_header()
         }
 
-    def archive_headers(self):
+    def json_headers(self):
         """For internal use."""
         result = self.headers()
         result['Content-Type'] = 'application/json'
         return result
-
-    def session_url(self):
-        """For internal use."""
-        url = self.api_url + '/session/create'
-        return url
-
-    def archive_url(self, archive_id=None):
-        """For internal use."""
-        url = self.api_url + '/v2/project/' + self.api_key + '/archive'
-        if archive_id:
-            url = url + '/' + archive_id
-        return url
 
     def start_archive(self, session_id, has_audio=True, has_video=True, name=None, output_mode=OutputModes.composed, resolution=None,
         layout_type=LayoutType.best_fit, stylesheet=None):
@@ -385,7 +390,7 @@ class OpenTok(object):
                    'layout': layout_options,
         }
 
-        response = requests.post(self.archive_url(), data=json.dumps(payload), headers=self.archive_headers(), proxies=self.proxies, timeout=self.timeout)
+        response = requests.post(self.endpoints.archive_url(), data=json.dumps(payload), headers=self.json_headers(), proxies=self.proxies, timeout=self.timeout)
 
         if response.status_code < 300:
             return Archive(self, response.json())
@@ -418,7 +423,7 @@ class OpenTok(object):
 
         :rtype: The Archive object corresponding to the archive being stopped.
         """
-        response = requests.post(self.archive_url(archive_id) + '/stop', headers=self.archive_headers(), proxies=self.proxies, timeout=self.timeout)
+        response = requests.post(self.endpoints.archive_url(archive_id) + '/stop', headers=self.json_headers(), proxies=self.proxies, timeout=self.timeout)
 
         if response.status_code < 300:
             return Archive(self, response.json())
@@ -441,7 +446,7 @@ class OpenTok(object):
 
         :param String archive_id: The archive ID of the archive to be deleted.
         """
-        response = requests.delete(self.archive_url(archive_id), headers=self.archive_headers(), proxies=self.proxies, timeout=self.timeout)
+        response = requests.delete(self.endpoints.archive_url(archive_id), headers=self.json_headers(), proxies=self.proxies, timeout=self.timeout)
 
         if response.status_code < 300:
             pass
@@ -459,7 +464,7 @@ class OpenTok(object):
 
         :rtype: The Archive object.
         """
-        response = requests.get(self.archive_url(archive_id), headers=self.archive_headers(), proxies=self.proxies, timeout=self.timeout)
+        response = requests.get(self.endpoints.archive_url(archive_id), headers=self.json_headers(), proxies=self.proxies, timeout=self.timeout)
 
         if response.status_code < 300:
             return Archive(self, response.json())
@@ -470,7 +475,7 @@ class OpenTok(object):
         else:
             raise RequestError("An unexpected error occurred", response.status_code)
 
-    def get_archives(self, offset=None, count=None):
+    def get_archives(self, offset=None, count=None, session_id=None):
         """Returns an ArchiveList, which is an array of archives that are completed and in-progress,
         for your API key.
 
@@ -479,6 +484,7 @@ class OpenTok(object):
           the most recent archive. If you do not specify an offset, 0 is used.
         :param int: count Optional. The number of archives to be returned. The maximum
           number of archives returned is 1000.
+        :param string: session_id Optional. Used to list archives for a specific session ID.
 
         :rtype: An ArchiveList object, which is an array of Archive objects.
         """
@@ -487,8 +493,14 @@ class OpenTok(object):
             params['offset'] = offset
         if count is not None:
             params['count'] = count
+        if session_id is not None:
+            params['sessionId'] = session_id
 
-        response = requests.get(self.archive_url() + "?" + urlencode(params), headers=self.archive_headers(), proxies=self.proxies, timeout=self.timeout)
+        endpoint = self.endpoints.archive_url() + "?" + urlencode(params)
+
+        response = requests.get(
+            endpoint, headers=self.json_headers(), proxies=self.proxies, timeout=self.timeout
+        )
 
         if response.status_code < 300:
             return ArchiveList(self, response.json())
@@ -498,6 +510,452 @@ class OpenTok(object):
             raise NotFoundError("Archive not found")
         else:
             raise RequestError("An unexpected error occurred", response.status_code)
+
+    def list_archives(self, offset=None, count=None, session_id=None):
+        """
+        New method to get archive list, it's alternative to 'get_archives()',
+        both methods exist to have backwards compatible
+        """
+        return self.get_archives(offset, count, session_id)
+
+    def signal(self, session_id, payload, connection_id=None):
+        """
+        Send signals to all participants in an active OpenTok session or to a specific client
+        connected to that session.
+
+        :param String session_id: The session ID of the OpenTok session that receives the signal
+
+        :param Dictionary payload: Structure that contains both the type and data fields. These
+        correspond to the type and data parameters passed in the client signal received handlers
+
+        :param String connection_id: The connection_id parameter is an optional string used to
+        specify the connection ID of a client connected to the session. If you specify this value,
+        the signal is sent to the specified client. Otherwise, the signal is sent to all clients
+        connected to the session
+        """
+        response = requests.post(
+            self.endpoints.signaling_url(session_id, connection_id),
+            data=json.dumps(payload),
+            headers=self.json_headers(),
+            proxies=self.proxies,
+            timeout=self.timeout
+        )
+
+        if response.status_code == 204:
+            pass
+        elif response.status_code == 400:
+            raise SignalingError('One of the signal properties - data, type, sessionId or connectionId - is invalid.')
+        elif response.status_code == 403:
+            raise AuthError('You are not authorized to send the signal. Check your authentication credentials.')
+        elif response.status_code == 404:
+            raise SignalingError('The client specified by the connectionId property is not connected to the session.')
+        elif response.status_code == 413:
+            raise SignalingError('The type string exceeds the maximum length (128 bytes), or the data string exceeds the maximum size (8 kB).')
+        else:
+            raise RequestError('An unexpected error occurred', response.status_code)
+
+    def get_stream(self, session_id, stream_id):
+        """
+        Returns an Stream object that contains information of an OpenTok stream:
+
+        -id: The stream ID
+        -videoType: "camera" or "screen"
+        -name: The stream name (if one was set when the client published the stream)
+        -layoutClassList: It's an array of the layout classes for the stream
+        """
+        endpoint = self.endpoints.get_stream_url(session_id, stream_id)
+        response = requests.get(
+            endpoint, headers=self.json_headers(), proxies=self.proxies, timeout=self.timeout
+        )
+
+        if response.status_code == 200:
+            return Stream(response.json())
+        elif response.status_code == 400:
+            raise GetStreamError('Invalid request. This response may indicate that data in your request data is invalid JSON. Or it may indicate that you do not pass in a session ID or you passed in an invalid stream ID.')
+        elif response.status_code == 403:
+            raise AuthError('You passed in an invalid OpenTok API key or JWT token.')
+        elif response.status_code == 408:
+            raise GetStreamError('You passed in an invalid stream ID.')
+        else:
+            raise RequestError('An unexpected error occurred', response.status_code)
+
+    def list_streams(self, session_id):
+        """
+        Returns a list of Stream objects that contains information of all
+        the streams in a OpenTok session, with the following attributes:
+
+        -count: An integer that indicates the number of streams in the session
+        -items: List of the Stream objects
+        """
+        endpoint = self.endpoints.get_stream_url(session_id)
+
+        response = requests.get(
+            endpoint, headers=self.json_headers(), proxies=self.proxies, timeout=self.timeout
+        )
+
+        if response.status_code == 200:
+            return StreamList(response.json())
+        elif response.status_code == 400:
+            raise GetStreamError('Invalid request. This response may indicate that data in your request data is invalid JSON. Or it may indicate that you do not pass in a session ID or you passed in an invalid stream ID.')
+        elif response.status_code == 403:
+            raise AuthError('You passed in an invalid OpenTok API key or JWT token.')
+        else:
+            raise RequestError('An unexpected error occurred', response.status_code)
+
+    def force_disconnect(self, session_id, connection_id):
+        """
+        Sends a request to disconnect a client from an OpenTok session
+
+        :param String session_id: The session ID of the OpenTok session from which the
+        client will be disconnected
+
+        :param String connection_id: The connection ID of the client that will be disconnected
+        """
+        endpoint = self.endpoints.force_disconnect_url(session_id, connection_id)
+        response = requests.delete(
+            endpoint, headers=self.json_headers(), proxies=self.proxies, timeout=self.timeout
+        )
+
+        if response.status_code == 204:
+            pass
+        elif response.status_code == 400:
+            raise ForceDisconnectError('One of the arguments - sessionId or connectionId - is invalid.')
+        elif response.status_code == 403:
+            raise AuthError('You are not authorized to forceDisconnect, check your authentication credentials.')
+        elif response.status_code == 404:
+            raise ForceDisconnectError('The client specified by the connectionId property is not connected to the session.')
+        else:
+            raise RequestError('An unexpected error occurred', response.status_code)
+
+    def set_archive_layout(self, archive_id, layout_type, stylesheet=None):
+        """
+        Use this method to change the layout of videos in an OpenTok archive
+
+        :param String archive_id: The ID of the archive that will be updated
+
+        :param String layout_type: The layout type for the archive. Valid values are:
+        'bestFit', 'custom', 'horizontalPresentation', 'pip' and 'verticalPresentation'
+
+        :param String stylesheet optional: CSS used to style the custom layout.
+        Specify this only if you set the type property to 'custom'
+        """
+        payload = {
+            'type':  layout_type,
+        }
+
+        if layout_type == 'custom':
+            if stylesheet is not None:
+                payload['stylesheet'] = stylesheet
+
+        endpoint = self.endpoints.set_archive_layout_url(archive_id)
+        response = requests.put(
+            endpoint,
+            data=json.dumps(payload),
+            headers=self.json_headers(),
+            proxies=self.proxies,
+            timeout=self.timeout
+        )
+
+        if response.status_code == 200:
+            pass
+        elif response.status_code == 400:
+            raise ArchiveError('Invalid request. This response may indicate that data in your request data is invalid JSON. It may also indicate that you passed in invalid layout options.')
+        elif response.status_code == 403:
+            raise AuthError('Authentication error.')
+        else:
+            raise RequestError('OpenTok server error.', response.status_code)
+
+    def dial(self, session_id, token, sip_uri, options=[]):
+        """
+        Use this method to connect a SIP platform to an OpenTok session. The audio from the end
+        of the SIP call is added to the OpenTok session as an audio-only stream. The OpenTok Media
+        Router mixes audio from other streams in the session and sends the mixed audio to the SIP
+        endpoint
+
+        :param String session_id: The OpenTok session ID for the SIP call to join
+
+        :param String token: The OpenTok token to be used for the participant being called
+
+        :param String sip_uri: The SIP URI to be used as destination of the SIP call initiated from
+        OpenTok to the SIP platform
+
+        :param Dictionary options optional: Aditional options with the following properties:
+
+            String 'from': The number or string that will be sent to the final SIP number
+            as the caller
+
+            Dictionary 'headers': Defines custom headers to be added to the SIP INVITE request
+            initiated from OpenTok to the SIP platform. Each of the custom headers must
+            start with the "X-" prefix, or the call will result in a Bad Request (400) response
+
+            Dictionary 'auth': Contains the username and password to be used in the the SIP
+            INVITE request for HTTP digest authentication, if it is required by the SIP platform
+            For example:
+
+                'auth': {
+                    'username': 'username',
+                    'password': 'password'
+                }
+
+            Boolean 'secure': A Boolean flag that indicates whether the media must be transmitted
+            encrypted (true) or not (false, the default)
+
+        :rtype: A SipCall object, which contains data of the SIP call: id, connectionId and streamId
+        """
+        payload = {
+            'sessionId': session_id,
+            'token': token,
+            'sip': {
+                'uri': sip_uri
+            }
+        }
+
+        if 'from' in options:
+            payload['sip']['from'] = options['from']
+
+        if 'headers' in options:
+            payload['sip']['headers'] = options['headers']
+
+        if 'auth' in options:
+            payload['sip']['auth'] = options['auth']
+
+        if 'secure' in options:
+            payload['sip']['secure'] = options['secure']
+
+        endpoint = self.endpoints.dial_url()
+        response = requests.post(
+            endpoint,
+            data=json.dumps(payload),
+            headers=self.json_headers(),
+            proxies=self.proxies,
+            timeout=self.timeout
+        )
+
+        if response.status_code == 200:
+            return SipCall(response.json())
+        elif response.status_code == 400:
+            raise SipDialError('Invalid request. Invalid session ID.')
+        elif response.status_code == 403:
+            raise AuthError('Authentication error.')
+        elif response.status_code == 404:
+            raise SipDialError('The session does not exist.')
+        elif response.status_code == 409:
+            raise SipDialError(
+                'You attempted to start a SIP call for a session that '
+                'does not use the OpenTok Media Router.')
+        else:
+            raise RequestError('OpenTok server error.', response.status_code)
+
+    def set_stream_class_lists(self, session_id, payload):
+        """
+        Use this method to change layout classes for OpenTok streams. The layout classes
+        define how the streams are displayed in the layout of a composed OpenTok archive
+
+        :param String session_id: The ID of the session of the streams that will be updated
+
+        :param List payload: A list defining the class lists to apply to the streams.
+        Each element in the list is a dictionary with two properties: 'id' and 'layoutClassList'.
+        The 'id' property is the stream ID (a String), and the 'layoutClassList' is an array of
+        class names (Strings) to apply to the stream. For example:
+
+            payload = [
+                {'id': '7b09ec3c-26f9-43d7-8197-f608f13d4fb6', 'layoutClassList': ['focus']},
+                {'id': '567bc941-6ea0-4c69-97fc-70a740b68976', 'layoutClassList': ['top']},
+                {'id': '307dc941-0450-4c09-975c-705740d08970', 'layoutClassList': ['bottom']}
+            ]
+        """
+        items_payload = {'items': payload}
+
+        endpoint = self.endpoints.set_stream_class_lists_url(session_id)
+        response = requests.put(
+            endpoint,
+            data=json.dumps(items_payload),
+            headers=self.json_headers(),
+            proxies=self.proxies,
+            timeout=self.timeout
+        )
+
+        if response.status_code == 200:
+            pass
+        elif response.status_code == 400:
+            raise SetStreamClassError(
+                'Invalid request. This response may indicate that data in your request data '
+                'is invalid JSON. It may also indicate that you passed in invalid layout options.'
+            )
+        elif response.status_code == 403:
+            raise AuthError('Authentication error.')
+        else:
+            raise RequestError('OpenTok server error.', response.status_code)
+
+    def start_broadcast(self, session_id, options):
+        """
+        Use this method to start a live streaming for an OpenTok session. This broadcasts the
+        session to an HLS (HTTP live streaming) or to RTMP streams. To successfully start
+        broadcasting a session, at least one client must be connected to the session. You can only
+        start live streaming for sessions that use the OpenTok Media Router (with the media mode set
+        to routed); you cannot use live streaming with sessions that have the media mode set to
+        relayed
+
+        :param String session_id: The session ID of the OpenTok session you want to broadcast
+
+        :param Dictionary options, with the following properties:
+
+            Dictionary 'layout' optional: Specify this to assign the initial layout type for the
+            broadcast. Valid values for the layout property are "bestFit", "custom",
+            "horizontalPresentation", "pip" and "verticalPresentation". If you specify a "custom"
+            layout type, set the stylesheet property of the layout object to the stylesheet.
+            If you do not specify an initial layout type, the broadcast stream uses the Best Fit
+            layout type
+
+            Integer 'maxDuration' optional: The maximum duration for the broadcast, in seconds.
+            The broadcast will automatically stop when the maximum duration is reached. You can
+            set the maximum duration to a value from 60 (60 seconds) to 36000 (10 hours). The
+            default maximum duration is 2 hours (7200 seconds)
+
+            Dictionary 'outputs': This object defines the types of broadcast streams you want to
+            start (both HLS and RTMP). You can include HLS, RTMP, or both as broadcast streams.
+            If you include RTMP streaming, you can specify up to five target RTMP streams. For
+            each RTMP stream, specify 'serverUrl' (the RTMP server URL), 'streamName' (the stream
+            name, such as the YouTube Live stream name or the Facebook stream key), and
+            (optionally) 'id' (a unique ID for the stream)
+
+            String 'resolution' optional: The resolution of the broadcast, either "640x480"
+            (SD, the default) or "1280x720" (HD)
+
+        :rtype A Broadcast object, which contains information of the broadcast: id, sessionId
+        projectId, createdAt, updatedAt, resolution, status and broadcastUrls
+        """
+        payload = {
+            'sessionId': session_id
+        }
+
+        payload.update(options)
+
+        endpoint = self.endpoints.broadcast_url()
+        response = requests.post(
+            endpoint,
+            data=json.dumps(payload),
+            headers=self.json_headers(),
+            proxies=self.proxies,
+            timeout=self.timeout
+        )
+
+        if response.status_code == 200:
+            return Broadcast(response.json())
+        elif response.status_code == 400:
+            raise BroadcastError(
+                'Invalid request. This response may indicate that data in your request data is '
+                'invalid JSON. It may also indicate that you passed in invalid layout options. '
+                'Or you have exceeded the limit of five simultaneous RTMP streams for an OpenTok '
+                'session. Or you specified and invalid resolution.')
+        elif response.status_code == 403:
+            raise AuthError('Authentication error.')
+        elif response.status_code == 409:
+            raise BroadcastError('The broadcast has already started for the session.')
+        else:
+            raise RequestError('OpenTok server error.', response.status_code)
+
+    def stop_broadcast(self, broadcast_id):
+        """
+        Use this method to stop a live broadcast of an OpenTok session
+
+        :param String broadcast_id: The ID of the broadcast you want to stop
+
+        :rtype A Broadcast object, which contains information of the broadcast: id, sessionId
+        projectId, createdAt, updatedAt and resolution
+        """
+        endpoint = self.endpoints.broadcast_url(broadcast_id, stop=True)
+        response = requests.post(
+            endpoint,
+            headers=self.json_headers(),
+            proxies=self.proxies,
+            timeout=self.timeout
+        )
+
+        if response.status_code == 200:
+            return Broadcast(response.json())
+        elif response.status_code == 400:
+            raise BroadcastError(
+                'Invalid request. This response may indicate that data in your request '
+                'data is invalid JSON.')
+        elif response.status_code == 403:
+            raise AuthError('Authentication error.')
+        elif response.status_code == 409:
+            raise BroadcastError(
+                'The broadcast (with the specified ID) was not found or it has already '
+                'stopped.')
+        else:
+            raise RequestError('OpenTok server error.', response.status_code)
+
+    def get_broadcast(self, broadcast_id):
+        """
+        Use this method to get details on a broadcast that is in-progress.
+
+        :param String broadcast_id: The ID of the broadcast you want to stop
+
+        :rtype A Broadcast object, which contains information of the broadcast: id, sessionId
+        projectId, createdAt, updatedAt, resolution, broadcastUrls and status
+        """
+        endpoint = self.endpoints.broadcast_url(broadcast_id)
+        response = requests.get(
+            endpoint,
+            headers=self.json_headers(),
+            proxies=self.proxies,
+            timeout=self.timeout
+        )
+
+        if response.status_code == 200:
+            return Broadcast(response.json())
+        elif response.status_code == 400:
+            raise BroadcastError(
+                'Invalid request. This response may indicate that data in your request '
+                'data is invalid JSON.')
+        elif response.status_code == 403:
+            raise AuthError('Authentication error.')
+        elif response.status_code == 409:
+            raise BroadcastError('No matching broadcast found (with the specified ID).')
+        else:
+            raise RequestError('OpenTok server error.', response.status_code)
+
+    def set_broadcast_layout(self, broadcast_id, layout_type, stylesheet=None):
+        """
+        Use this method to change the layout type of a live streaming broadcast
+
+        :param String broadcast_id: The ID of the broadcast that will be updated
+
+        :param String layout_type: The layout type for the broadcast. Valid values are:
+        'bestFit', 'custom', 'horizontalPresentation', 'pip' and 'verticalPresentation'
+
+        :param String stylesheet optional: CSS used to style the custom layout.
+        Specify this only if you set the type property to 'custom'
+        """
+        payload = {
+            'type': layout_type,
+        }
+
+        if layout_type == 'custom':
+            if stylesheet is not None:
+                payload['stylesheet'] = stylesheet
+
+        endpoint = self.endpoints.broadcast_url(broadcast_id, layout=True)
+        response = requests.put(
+            endpoint,
+            data=json.dumps(payload),
+            headers=self.json_headers(),
+            proxies=self.proxies,
+            timeout=self.timeout
+        )
+
+        if response.status_code == 200:
+            pass
+        elif response.status_code == 400:
+            raise BroadcastError(
+                'Invalid request. This response may indicate that data in your request data is '
+                'invalid JSON. It may also indicate that you passed in invalid layout options.')
+        elif response.status_code == 403:
+            raise AuthError('Authentication error.')
+        else:
+            raise RequestError('OpenTok server error.', response.status_code)
 
     def _sign_string(self, string, secret):
         return hmac.new(secret.encode('utf-8'), string.encode('utf-8'), hashlib.sha1).hexdigest()
